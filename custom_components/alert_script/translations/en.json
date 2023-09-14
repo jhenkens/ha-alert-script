@@ -1,7 +1,7 @@
 {
     "entity_component": {
         "_": {
-            "name": "Alert",
+            "name": "Alert Script",
             "state": {
                 "idle": "Idle",
                 "off": "Acknowledged",
@@ -9,5 +9,5 @@
             }
         }
     },
-    "title": "Alert"
+    "title": "Alert Script"
 }

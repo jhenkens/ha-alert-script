@@ -13,6 +13,10 @@ from homeassistant.components.notify import (
     ATTR_TITLE,
     DOMAIN as DOMAIN_NOTIFY,
 )
+
+from homeassistant.components.script import (
+    DOMAIN as DOMAIN_SCRIPT,
+)
 from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
@@ -43,10 +47,13 @@ from .const import (
     CONF_ALERT_MESSAGE,
     CONF_CAN_ACK,
     CONF_DATA,
+    CONF_DATA_TEMPLATE,
     CONF_DONE_MESSAGE,
     CONF_NOTIFIERS,
+    CONF_SCRIPT,
     CONF_SKIP_FIRST,
     CONF_TITLE,
+    CONF_VARIABLES,
     DEFAULT_CAN_ACK,
     DEFAULT_SKIP_FIRST,
     DOMAIN,
@@ -69,10 +76,19 @@ ALERT_SCHEMA = vol.Schema(
         vol.Optional(CONF_ALERT_MESSAGE): cv.template,
         vol.Optional(CONF_DONE_MESSAGE): cv.template,
         vol.Optional(CONF_TITLE): cv.template,
-        vol.Optional(CONF_DATA): dict,
+        vol.Optional(CONF_DATA): vol.Any(
+                cv.template, vol.All(dict, cv.template_complex)
+            ),
+        vol.Optional(CONF_DATA_TEMPLATE): vol.Any(
+                cv.template, vol.All(dict, cv.template_complex)
+            ),
         vol.Optional(CONF_NOTIFIERS, default=list): vol.All(
             cv.ensure_list, [cv.string]
         ),
+        vol.Optional(CONF_VARIABLES): vol.Any(
+                cv.template, vol.All(dict, cv.template_complex)
+            ),
+        vol.Optional(CONF_SCRIPT): cv.string,
     }
 )
 
@@ -83,9 +99,9 @@ CONFIG_SCHEMA = vol.Schema(
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Alert component."""
-    component = EntityComponent[Alert](LOGGER, DOMAIN, hass)
+    component = EntityComponent[AlertScript](LOGGER, DOMAIN, hass)
 
-    entities: list[Alert] = []
+    entities: list[AlertScript] = []
 
     for object_id, cfg in config[DOMAIN].items():
         if not cfg:
@@ -101,10 +117,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         notifiers = cfg[CONF_NOTIFIERS]
         can_ack = cfg[CONF_CAN_ACK]
         title_template = cfg.get(CONF_TITLE)
-        data = cfg.get(CONF_DATA)
+        data: dict[str, Any] | None = cfg.get(CONF_DATA)
+        data_template: dict[str, Any] | None = cfg.get(CONF_DATA_TEMPLATE)
+        variables: dict[str, Any] | None = cfg.get(CONF_VARIABLES)
+        script: str | None | None = cfg.get(CONF_SCRIPT)
 
         entities.append(
-            Alert(
+            AlertScript(
                 hass,
                 object_id,
                 name,
@@ -118,6 +137,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 can_ack,
                 title_template,
                 data,
+                data_template,
+                variables,
+                script
             )
         )
 
@@ -133,7 +155,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-class Alert(Entity):
+class AlertScript(Entity):
     """Representation of an alert."""
 
     _attr_should_poll = False
@@ -152,7 +174,10 @@ class Alert(Entity):
         notifiers: list[str],
         can_ack: bool,
         title_template: Template | None,
-        data: dict[Any, Any],
+        data: dict[str, Any] | None,
+        data_template: dict[str,Any] | None,
+        variables: dict[str,Any] | None,
+        script: str | None,
     ) -> None:
         """Initialize the alert."""
         self.hass = hass
@@ -160,6 +185,8 @@ class Alert(Entity):
         self._alert_state = state
         self._skip_first = skip_first
         self._data = data
+        self._data_template = data_template
+        self._variables = variables
 
         self._message_template = message_template
         if self._message_template is not None:
@@ -174,6 +201,7 @@ class Alert(Entity):
             self._title_template.hass = hass
 
         self._notifiers = notifiers
+        self._script = script
         self._can_ack = can_ack
 
         self._delay = [timedelta(minutes=val) for val in repeat]
@@ -184,6 +212,7 @@ class Alert(Entity):
         self._cancel: Callable[[], None] | None = None
         self._send_done_message = False
         self.entity_id = f"{DOMAIN}.{entity_id}"
+        
 
         async_track_state_change_event(
             hass, [watched_entity_id], self.watched_entity_change
@@ -278,6 +307,51 @@ class Alert(Entity):
         message = self._done_message_template.async_render(parse_result=False)
 
         await self._send_notification_message(message)
+        
+    def _build_dict(self, dicts: list[dict[str|any]], **kwargs: Any):
+        if not dicts:
+            return None
+        
+        result = {}
+        def _data_template_creator(value: Any) -> Any:
+            """Recursive template creator helper function."""
+            if isinstance(value, list):
+                return [_data_template_creator(item) for item in value]
+            if isinstance(value, dict):
+                return {
+                    key: _data_template_creator(item) for key, item in value.items()
+                }
+            if not isinstance(value, Template):
+                return value
+            value.hass = self._hass
+            return value.async_render(kwargs, parse_result=False)
+
+        for dict in dicts:
+            if not dict:
+                continue
+            result.update(_data_template_creator(dict))
+        return result
+        
+    async def _call_script(self, event: str) -> None:
+        if not self._script:
+            return
+        
+        script_variables = {"event":event}
+
+        if self._variables:
+            script_variables.update(self._build_dict([self._data, self._data_template]))
+
+        LOGGER.debug(script_variables)
+
+        try:
+            await self.hass.services.async_call(
+                DOMAIN_SCRIPT, self._script, script_variables, context=self._context
+            )
+        except ServiceNotFound:
+            LOGGER.error(
+                "Failed to call script.%s, retrying at next notification interval",
+                self._script,
+            )
 
     async def _send_notification_message(self, message: Any) -> None:
         if not self._notifiers:
@@ -288,8 +362,8 @@ class Alert(Entity):
         if self._title_template is not None:
             title = self._title_template.async_render(parse_result=False)
             msg_payload[ATTR_TITLE] = title
-        if self._data:
-            msg_payload[ATTR_DATA] = self._data
+        if self._data or self._data_template:
+            msg_payload[ATTR_DATA] = self._build_dict([self._data, self._data_template])
 
         LOGGER.debug(msg_payload)
 

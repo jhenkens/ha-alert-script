@@ -1,14 +1,14 @@
 toggle:
   target:
     entity:
-      domain: alert
+      domain: alert_script
 
 turn_off:
   target:
     entity:
-      domain: alert
+      domain: alert_script
 
 turn_on:
   target:
     entity:
-      domain: alert
+      domain: alert_script

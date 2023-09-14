@@ -1,5 +1,5 @@
 {
-  "title": "Alert",
+  "title": "Alert Script",
   "entity_component": {
     "_": {
       "name": "[%key:component::alert::title%]",

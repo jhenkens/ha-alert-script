@@ -1,9 +1,10 @@
 {
-  "domain": "alert",
-  "name": "Alert",
+  "domain": "alert_script",
+  "name": "Alert Script",
   "after_dependencies": ["notify"],
   "codeowners": ["@home-assistant/core", "@frenck"],
   "documentation": "https://www.home-assistant.io/integrations/alert_script",
   "iot_class": "local_push",
-  "quality_scale": "internal"
+  "quality_scale": "internal",
+  "version": "0.1.0"
 }
