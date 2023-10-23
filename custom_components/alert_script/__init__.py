@@ -47,7 +47,6 @@ from .const import (
     CONF_ALERT_MESSAGE,
     CONF_CAN_ACK,
     CONF_DATA,
-    CONF_DATA_TEMPLATE,
     CONF_DONE_MESSAGE,
     CONF_NOTIFIERS,
     CONF_SCRIPT,
@@ -77,9 +76,6 @@ ALERT_SCHEMA = vol.Schema(
         vol.Optional(CONF_DONE_MESSAGE): cv.template,
         vol.Optional(CONF_TITLE): cv.template,
         vol.Optional(CONF_DATA): vol.Any(
-                cv.template, vol.All(dict, cv.template_complex)
-            ),
-        vol.Optional(CONF_DATA_TEMPLATE): vol.Any(
                 cv.template, vol.All(dict, cv.template_complex)
             ),
         vol.Optional(CONF_NOTIFIERS, default=list): vol.All(
@@ -118,7 +114,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         can_ack = cfg[CONF_CAN_ACK]
         title_template = cfg.get(CONF_TITLE)
         data: dict[str, Any] | None = cfg.get(CONF_DATA)
-        data_template: dict[str, Any] | None = cfg.get(CONF_DATA_TEMPLATE)
         variables: dict[str, Any] | None = cfg.get(CONF_VARIABLES)
         script: str | None | None = cfg.get(CONF_SCRIPT)
 
@@ -137,7 +132,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 can_ack,
                 title_template,
                 data,
-                data_template,
                 variables,
                 script
             )
@@ -175,7 +169,6 @@ class AlertScript(Entity):
         can_ack: bool,
         title_template: Template | None,
         data: dict[str, Any] | None,
-        data_template: dict[str,Any] | None,
         variables: dict[str,Any] | None,
         script: str | None,
     ) -> None:
@@ -185,7 +178,6 @@ class AlertScript(Entity):
         self._alert_state = state
         self._skip_first = skip_first
         self._data = data
-        self._data_template = data_template
         self._variables = variables
 
         self._message_template = message_template
@@ -294,6 +286,7 @@ class AlertScript(Entity):
                 message = self._attr_name
 
             await self._send_notification_message(message)
+            await self._call_script("fire")
         await self._schedule_notify()
 
     async def _notify_done_message(self) -> None:
@@ -301,36 +294,10 @@ class AlertScript(Entity):
         LOGGER.info("Alerting: %s", self._done_message_template)
         self._send_done_message = False
 
-        if self._done_message_template is None:
-            return
-
-        message = self._done_message_template.async_render(parse_result=False)
-
-        await self._send_notification_message(message)
-        
-    def _build_dict(self, dicts: list[dict[str|any]], **kwargs: Any):
-        if not dicts:
-            return None
-        
-        result = {}
-        def _data_template_creator(value: Any) -> Any:
-            """Recursive template creator helper function."""
-            if isinstance(value, list):
-                return [_data_template_creator(item) for item in value]
-            if isinstance(value, dict):
-                return {
-                    key: _data_template_creator(item) for key, item in value.items()
-                }
-            if not isinstance(value, Template):
-                return value
-            value.hass = self._hass
-            return value.async_render(kwargs, parse_result=False)
-
-        for dict in dicts:
-            if not dict:
-                continue
-            result.update(_data_template_creator(dict))
-        return result
+        if self._done_message_template is not None:
+            message = self._done_message_template.async_render(parse_result=False)
+            await self._send_notification_message(message)
+        await self._call_script("done")
         
     async def _call_script(self, event: str) -> None:
         if not self._script:
@@ -339,7 +306,7 @@ class AlertScript(Entity):
         script_variables = {"event":event}
 
         if self._variables:
-            script_variables.update(self._build_dict([self._data, self._data_template]))
+            script_variables.update(self._variables)
 
         LOGGER.debug(script_variables)
 
@@ -362,8 +329,8 @@ class AlertScript(Entity):
         if self._title_template is not None:
             title = self._title_template.async_render(parse_result=False)
             msg_payload[ATTR_TITLE] = title
-        if self._data or self._data_template:
-            msg_payload[ATTR_DATA] = self._build_dict([self._data, self._data_template])
+        if self._data:
+            msg_payload[ATTR_DATA] = self._data
 
         LOGGER.debug(msg_payload)
 
@@ -383,15 +350,21 @@ class AlertScript(Entity):
         LOGGER.debug("Reset Alert: %s", self._attr_name)
         self._ack = False
         self.async_write_ha_state()
+        await self._call_script("unack")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Async Acknowledge alert."""
         LOGGER.debug("Acknowledged Alert: %s", self._attr_name)
         self._ack = True
         self.async_write_ha_state()
+        await self._call_script("ack")
 
     async def async_toggle(self, **kwargs: Any) -> None:
         """Async toggle alert."""
         if self._ack:
             return await self.async_turn_on()
         return await self.async_turn_off()
+
+
+# Todo: 
+# 1. Why is check_templates_warn angry at us? Can we figure that out and clean it up?
