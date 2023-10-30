@@ -270,6 +270,19 @@ class AlertScript(Entity):
             next_msg,
         )
         self._next_delay = min(self._next_delay + 1, len(self._delay) - 1)
+    
+    def _data_template_creator(self, value: Any, **kwargs) -> Any:
+        """Recursive template creator helper function."""
+        if isinstance(value, list):
+            return [self._data_template_creator(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: self._data_template_creator(item) for key, item in value.items()
+            }
+        if not isinstance(value, Template):
+            return value
+        value.hass = self.hass
+        return value.async_render(kwargs, parse_result=False)
 
     async def _notify(self, *args: Any) -> None:
         """Send the alert notification."""
@@ -306,7 +319,7 @@ class AlertScript(Entity):
         script_variables = {"event":event}
 
         if self._variables:
-            script_variables.update(self._variables)
+            script_variables.update(self._data_template_creator(self._variables))
 
         LOGGER.debug(script_variables)
 
@@ -330,7 +343,7 @@ class AlertScript(Entity):
             title = self._title_template.async_render(parse_result=False)
             msg_payload[ATTR_TITLE] = title
         if self._data:
-            msg_payload[ATTR_DATA] = self._data
+            msg_payload[ATTR_DATA] = self._data_template_creator(self._data)
 
         LOGGER.debug(msg_payload)
 
