@@ -25,6 +25,10 @@ from homeassistant.util.dt import now
 
 from .const import DOMAIN, LOGGER
 
+from homeassistant.components.script import (
+    DOMAIN as DOMAIN_SCRIPT,
+)
+
 
 class AlertScriptEntity(Entity):
     """Representation of an alert."""
@@ -198,7 +202,7 @@ class AlertScriptEntity(Entity):
 
         try:
             await self.hass.services.async_call(
-                DOMAIN, self._script, script_variables, context=self._context
+                DOMAIN_SCRIPT, self._script, script_variables, context=self._context
             )
         except ServiceNotFound:
             LOGGER.error(
