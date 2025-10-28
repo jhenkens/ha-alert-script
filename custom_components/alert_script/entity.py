@@ -198,7 +198,7 @@ class AlertScriptEntity(Entity):
 
         try:
             await self.hass.services.async_call(
-                DOMAIN_ALERT, self._script, script_variables, context=self._context
+                DOMAIN, self._script, script_variables, context=self._context
             )
         except ServiceNotFound:
             LOGGER.error(
